@@ -117,6 +117,8 @@ bpf_text = """
 
 struct key_t {
     u64 pid;
+    u64 tid;
+//    u64 count;
     u64 tgid;
     int user_stack_id;
     int kernel_stack_id;
@@ -128,6 +130,7 @@ BPF_STACK_TRACE(stack_traces, STACK_STORAGE_SIZE);
 
 struct warn_event_t {
     u32 pid;
+    u32 tid;
     u32 tgid;
     u32 t_start;
     u32 t_end;
@@ -135,9 +138,11 @@ struct warn_event_t {
 BPF_PERF_OUTPUT(warn_events);
 
 int oncpu(struct pt_regs *ctx, struct task_struct *prev) {
-    u32 pid = prev->pid;
+    //u32 pid = prev->pid;
+    u32 tid = prev->pid;
     u32 tgid = prev->tgid;
-    u64 ts, *tsp;
+    u32 pid = prev->tgid;
+    u64 ts, *tsp, pid_tgid;
 
     // record previous thread sleep time
     if ((THREAD_FILTER) && (STATE_FILTER)) {
@@ -146,8 +151,11 @@ int oncpu(struct pt_regs *ctx, struct task_struct *prev) {
     }
 
     // get the current thread's start time
-    pid = bpf_get_current_pid_tgid();
-    tgid = bpf_get_current_pid_tgid() >> 32;
+    //pid = bpf_get_current_pid_tgid();
+    //tgid = bpf_get_current_pid_tgid() >> 32;
+    pid_tgid = bpf_get_current_pid_tgid();
+    pid = pid_tgid >> 32;
+    tid = pid_tgid;
     tsp = start.lookup(&pid);
     if (tsp == 0) {
         return 0;        // missed start or filtered
@@ -156,10 +164,11 @@ int oncpu(struct pt_regs *ctx, struct task_struct *prev) {
     // calculate current thread's delta time
     u64 t_start = *tsp;
     u64 t_end = bpf_ktime_get_ns();
-    start.delete(&pid);
+    start.delete(&tid);
     if (t_start > t_end) {
         struct warn_event_t event = {
             .pid = pid,
+            .tid = tid,
             .tgid = tgid,
             .t_start = t_start,
             .t_end = t_end,
@@ -177,6 +186,8 @@ int oncpu(struct pt_regs *ctx, struct task_struct *prev) {
     struct key_t key = {};
 
     key.pid = pid;
+    key.tid = tid;
+//    key.count++;
     key.tgid = tgid;
     key.user_stack_id = USER_STACK_GET;
     key.kernel_stack_id = KERNEL_STACK_GET;
@@ -353,7 +364,7 @@ for k, v in sorted(counts.items(), key=lambda counts: counts[1].value):
                 for addr in user_stack:
                     print("    %s" % b.sym(addr, k.tgid).decode('utf-8', 'replace'))
         print("    %-16s %s (%d)" % ("-", k.name.decode('utf-8', 'replace'), k.pid))
-        print("        %d\n" % v.value)
+        print("      %d\n" % v.value)
 
 if missing_stacks > 0:
     enomem_str = "" if not has_enomem else \
